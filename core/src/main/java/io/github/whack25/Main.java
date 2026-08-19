@@ -1,0 +1,303 @@
+package io.github.whack25;
+
+import com.badlogic.gdx.ApplicationAdapter;
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
+import com.badlogic.gdx.InputAdapter;
+import com.badlogic.gdx.audio.Music;
+import com.badlogic.gdx.audio.Sound;
+import com.badlogic.gdx.graphics.Color;
+import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
+import com.badlogic.gdx.graphics.g2d.Sprite;
+import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.utils.ScreenUtils;
+import com.badlogic.gdx.utils.viewport.FitViewport;
+
+import io.github.whack25.graphGen.GraphGenerator;
+import livegraph.Graph;
+import livegraph.GraphNode;
+import livegraph.NodeType;
+import livegraph.RobotMovement;
+import robotHighlighting.RobotViewer;
+
+/** {@link com.badlogic.gdx.ApplicationListener} implementation shared by all platforms. */
+public class Main extends ApplicationAdapter {
+    private SpriteBatch spriteBatch;
+    private ShapeRenderer shapeRenderer;
+    private Texture image;
+    FitViewport viewport;
+    Texture backgroundTexture;
+    Texture bucketTexture;
+    Texture dropTexture;
+    Texture houseTexture;
+    Texture roadTexture;
+    Texture roadTopTexture;
+    Texture roadDownTexture;
+    Texture roadRightTexture;
+    Texture roadLeftTexture;
+    Texture roadBlockedTexture;
+    Texture carTexture;
+    Texture grassTexture;
+    Sound dropSound;
+    Music music;
+    Sprite bucketSprite;
+    BitmapFont font;
+    private Graph<Integer> gameGraph;
+    private final int MAX_FRAME_RATE = 2;
+    private int robotsSpawned = 0;
+    private int robotsHome = 0;
+
+    private boolean shiftKeyPressed = false;
+    private RobotViewer robotViewer;
+    private boolean doHighlightRobot = false; 
+
+    @Override
+    public void create() {
+        /* Load textures, sounds here - you should not create these at constructor
+        or init level as LibGDX needs to be loaded first
+        */
+        robotViewer = new RobotViewer();
+        shapeRenderer = new ShapeRenderer();
+
+        GraphGenerator generator = new GraphGenerator();
+        for (int i = 0; i < 20; i++) { // generating the grid is rarely successful first time due to randomness, so retry a few times
+            try {
+                gameGraph = generator.generate(30, 30, 0.35, 0.1); //Graph.exampleGraph(); // generator.generate(20, 20, 0.4, 0.2);
+                break;
+            } catch (Exception e) {
+                System.err.println("Failed to generate the grid, retrying... (" + (i+1) + "/20)");
+                e.printStackTrace();
+            }
+        }
+
+        gameGraph.setOnRobotFinish(() -> {
+            robotsHome++;
+        });
+
+        gameGraph.setOnRobotSpawn(() -> {
+            robotsSpawned++;
+        });
+
+        spriteBatch = new SpriteBatch();
+        image = new Texture("libgdx.png");
+        viewport = new FitViewport(gameGraph.getGridWidth(), gameGraph.getGridHeight());
+        backgroundTexture = new Texture("background.png");
+        bucketTexture = new Texture("bucket.png");
+        dropTexture = new Texture("drop.png");
+        houseTexture = new Texture("house.png");
+        roadTexture = new Texture("roadtile.png"); // TODO
+        roadTopTexture = new Texture("roadTop.png");
+        roadDownTexture = new Texture("roadDown.png");
+        roadRightTexture = new Texture("roadRight.png");
+        roadLeftTexture = new Texture("roadLeft.png");
+        roadBlockedTexture = new Texture("roadBlocked.png");
+        grassTexture = new Texture("Grass.png");
+        carTexture = new Texture("car.png");
+        dropSound = Gdx.audio.newSound(Gdx.files.internal("drop.mp3"));
+        music = Gdx.audio.newMusic(Gdx.files.internal("music.mp3"));
+        bucketSprite = new Sprite(bucketTexture);
+        bucketSprite.setSize(1,1);
+        font = new BitmapFont(); // default font
+        font.getData().setScale(0.125001f);
+        // Setup touch input
+        Gdx.input.setInputProcessor(
+            new InputAdapter() {
+                @Override
+                public boolean touchDown(int screenX, int screenY, int pointer, int button) {
+                    if (button == Input.Buttons.LEFT) {
+                        // Convert screen coordinates to world coordinates
+                        Vector3 worldCoordinates = viewport.unproject(new Vector3(screenX, screenY, 0));
+                        int gridX = (int) worldCoordinates.x;
+                        int gridY = (int) worldCoordinates.y;
+
+                        
+                        if (shiftKeyPressed) {
+                            robotViewer.setNewRobot(worldCoordinates.x, worldCoordinates.y, gameGraph);
+                            doHighlightRobot = true;
+                        } else {
+
+                            System.out.println("Clicked on grid square: (" + gridX + ", " + gridY + ")");
+                            gameGraph.toggleNodeEnabled(gridX, gridY);
+
+                            // Play sound on click
+                            dropSound.play();
+
+                            return true; // event handled
+                        }
+                    }
+                    return false; // event not handled
+                }
+            }
+        );
+    }
+
+    @Override
+    public void render() {
+        logic();
+        // waitBeforeFrame();
+        input();
+        draw();
+//        ScreenUtils.clear(0.15f, 0.15f, 0.2f, 1f);
+//        batch.begin();
+//        batch.draw(image, 140, 210);
+//        batch.end();
+    }
+
+    @Override
+    public void resize(int width, int height) {
+        viewport.update(width, height, true);
+    }
+
+    /**
+     * Wait for frame stabilisation to cap frame rate.
+     */
+    private void waitBeforeFrame() {
+        float delta = Gdx.graphics.getDeltaTime();
+        float targetFrameTime = 1.0f / MAX_FRAME_RATE;
+        if (delta < targetFrameTime) {
+            try {
+                Thread.sleep((long) ((targetFrameTime - delta) * 1000));
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        } else {
+            // Frame took longer than target frame time; no wait needed
+            System.out.println("Warning: Frame time exceeded target frame time: " + delta + " seconds");
+        }
+    }
+
+    private void input() {
+        // Toggle robot spawning when "S" is tapped
+        if (Gdx.input.isKeyJustPressed(Input.Keys.S)) {
+            gameGraph.toggleSpawnRobots();
+            System.out.println("Toggling robot spawning");
+        }
+        shiftKeyPressed = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT);
+
+//        float speed = .25f;
+//        float delta = Gdx.graphics.getDeltaTime(); // time since last frame
+//
+
+//            bucketSprite.translateX(speed * delta);
+//        } else if (Gdx.input.isKeyPressed(Input.Keys.LEFT)) {
+//            bucketSprite.translateX(-speed * delta);
+//        }
+    }
+
+    private void logic() {
+        gameGraph.tick();
+    }
+
+    private void draw() {
+        //System.out.println(System.currentTimeMillis()+": drawing new frame at time");
+
+        Gdx.gl.glClearColor(0, 0, 0, 1);
+        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+
+        ScreenUtils.clear(Color.BLACK);
+        viewport.apply();
+        spriteBatch.setProjectionMatrix(viewport.getCamera().combined);
+        spriteBatch.begin();
+
+        // Draw in world units
+        // .draw draws from the bottom left corner (as the coords)
+
+        float worldWidth = viewport.getWorldWidth();
+        float worldHeight = viewport.getWorldHeight();
+
+        spriteBatch.draw(backgroundTexture, 0, 0, worldWidth, worldHeight);
+
+        // Add background textures
+        for (GraphNode<Integer, Integer> node : gameGraph.getNodes().values()) {
+            spriteBatch.draw(node.getTileType() == NodeType.HOUSE ? houseTexture :
+                             node.isBlocked() ? roadBlockedTexture :
+                             node.getTileType() == NodeType.ROAD ? roadTexture :
+                             grassTexture,
+                node.getX(), node.getY(), 1,1);
+
+        }
+
+        // Draw robots
+        for (GraphNode<Integer, Integer> node : gameGraph.getNodes().values()) {
+            if (!node.getOccupiers().isEmpty()) {
+                for (RobotMovement<Integer, Integer> movement : node.getOccupiers()) {
+                    float progress = 1.0f - ((float) movement.getRemainingProgression() / (float) movement.getTotalEdgeWeight());
+                    spriteBatch.draw(carTexture,
+                        0.25f+node.getX()*progress + movement.getOriginX()*(1-progress),
+                        0.25f+node.getY()*progress + movement.getOriginY()*(1-progress),
+                        0.5f,0.5f);
+                }
+            }
+        }
+
+        // Draw text
+        font.draw(spriteBatch, robotsSpawned+"; "+robotsHome, 1, worldHeight - 1);
+
+//        bucketSprite.draw(spriteBatch);
+
+        spriteBatch.end();
+
+                // Draw highlight
+        doHighlightRobot = doHighlightRobot ? robotViewer.updateRobotLocation() : false;
+        if (doHighlightRobot) {
+            System.out.println("render");
+            shapeRenderer.setProjectionMatrix(viewport.getCamera().combined);
+            Gdx.graphics.getGL20().glEnable(GL20.GL_BLEND);
+            Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
+            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
+            shapeRenderer.setColor(1, 0, 1, 0.3f);
+            // draw car
+            float progress = 1.0f - ((float) robotViewer.robot.getRemainingProgression() / (float) robotViewer.robot.getTotalEdgeWeight());
+            shapeRenderer.circle(robotViewer.currentNode.getX()*progress + 0.5f+ robotViewer.robot.getOriginX()*(1-progress),
+                0.5f+robotViewer.currentNode.getY()*progress + robotViewer.robot.getOriginY()*(1-progress),
+                2f);
+            shapeRenderer.end();
+            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
+            shapeRenderer.setColor(1, 0, 1, 0.3f);
+            // draw house;
+            shapeRenderer.circle(0.5f+gameGraph.getNode(robotViewer.robot.getRobot().destinationNodeId).getX(),
+                0.5f+gameGraph.getNode(robotViewer.robot.getRobot().destinationNodeId).getY(),
+                2f);
+            shapeRenderer.end();
+        }
+
+        
+    }
+
+//    private Texture getRoadTextureType(GraphNode<Integer, Integer> node) {
+//        // Whether there is a road tile relative to the current tile
+//        boolean roadLeft = false;
+//        boolean roadRight = false;
+//        boolean roadTop = false;
+//        boolean roadDown = false;
+//
+//        System.out.println("Neighbours: "+ node.getNeighbours().size());
+//
+//        for (ConnectedNode<Integer, Integer> neighbour : node.getNeighbours()) {
+//
+//            if (neighbour.node.getTileType() == NodeType.ROAD) {
+//                if (neighbour.node.getX() < node.getX()) roadLeft = true;
+//                if (neighbour.node.getX() > node.getX()) roadRight = true;
+//                if (neighbour.node.getY() < node.getY()) roadDown = true;
+//                if (neighbour.node.getY() > node.getY()) roadTop = true;
+//            }
+//        }
+//
+//        if (!roadLeft && roadRight && roadTop && roadDown) return roadLeftTexture;
+//        if (roadLeft && !roadRight && roadTop && roadDown) return roadRightTexture;
+//        if (roadLeft && roadRight && !roadTop && roadDown) return roadTopTexture;
+//        if (roadLeft && roadRight && roadTop && !roadDown) return roadDownTexture;
+//        return roadTexture; // default
+//    }
+
+    @Override
+    public void dispose() {
+        spriteBatch.dispose();
+        font.dispose();
+        image.dispose();
+    }
+}
